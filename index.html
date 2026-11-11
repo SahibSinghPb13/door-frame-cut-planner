@@ -107,73 +107,86 @@ function parseCuts(t){
 }
 
 function plan(pieces,sizes,kerf){
-  // Deterministic best-fit packing. For each available stock length, search
-  // combinations of remaining cuts and choose the subset that uses the most
-  // of that board (including kerf between cuts).
-  const remaining=pieces.slice().sort((a,b)=>b-a);
-  const bins=[];
+  // Global backtracking bin-packing: assign every cut across all available
+  // stock boards together. This avoids greedy early choices that can make a
+  // feasible order appear impossible.
+  const cuts=pieces.slice().sort((a,b)=>b-a);
   const eps=1e-9;
+  const boards=[];
+  const limit=Math.max(1,cuts.length);
+  for(const s of sizes){
+    const qty=Number.isFinite(s.qty)?Math.min(s.qty,limit):limit;
+    for(let i=0;i<qty;i++) boards.push({
+      len:s.len, first:!!s.first, cuts:[], used:0
+    });
+  }
+  boards.sort((a,b)=>(Number(b.first)-Number(a.first)) || b.len-a.len);
 
-  function bestSubset(capacity){
-    const arr=remaining;
-    const n=arr.length;
-    let best=[],bestUsed=0,nodes=0;
-    const suffix=new Array(n+1).fill(0);
-    for(let i=n-1;i>=0;i--)suffix[i]=suffix[i+1]+arr[i];
+  if(!boards.length)return null;
+  let best=null, nodes=0;
+  const maxNodes=2000000;
+  const suffix=new Array(cuts.length+1).fill(0);
+  for(let i=cuts.length-1;i>=0;i--)suffix[i]=suffix[i+1]+cuts[i];
 
-    function visit(i,used,chosen){
-      if(++nodes>250000)return;
-      if(used>bestUsed+eps){
-        bestUsed=used;
-        best=chosen.slice();
-        if(capacity-bestUsed<eps)return;
-      }
-      if(i>=n||used+suffix[i]<bestUsed-eps)return;
-      // A cut can only be added if its length plus the kerf between cuts fits.
-      const add=arr[i]+(chosen.length?kerf:0);
-      if(used+add<=capacity+eps){
-        chosen.push(i);
-        visit(i+1,used+add,chosen);
-        chosen.pop();
-      }
-      visit(i+1,used,chosen);
-    }
-    visit(0,0,[]);
-    return best;
+  function scoreSolution(){
+    const used=boards.filter(b=>b.cuts.length);
+    const firstUsed=used.filter(b=>b.first).length;
+    const waste=used.reduce((sum,b)=>sum+b.len-b.used,0);
+    const leftoverPieces=used.filter(b=>b.len-b.used>eps).length;
+    return {used,firstUsed,waste,leftoverPieces};
+  }
+  function better(x,y){
+    if(!y)return true;
+    if(x.used.length!==y.used.length)return x.used.length<y.used.length;
+    if(x.firstUsed!==y.firstUsed)return x.firstUsed>y.firstUsed;
+    if(Math.abs(x.waste-y.waste)>eps)return x.waste<y.waste;
+    return x.leftoverPieces<y.leftoverPieces;
   }
 
-  function fillStock(stockList,first){
-    for(const s of stockList){
-      const qty=Number.isFinite(s.qty)
-        ? Math.min(s.qty,remaining.length)
-        : remaining.length;
-      for(let n=0;n<qty&&remaining.length;n++){
-        const chosen=bestSubset(s.len);
-        if(!chosen.length)break;
-        const cuts=chosen.map(i=>remaining[i]);
-        for(const i of chosen.slice().sort((x,y)=>y-x))remaining.splice(i,1);
-        const used=cuts.reduce((sum,c)=>sum+c,0)+kerf*Math.max(0,cuts.length-1);
-        bins.push({cuts,used,len:s.len,first});
-      }
+  function search(i){
+    if(++nodes>maxNodes)return;
+    if(i===cuts.length){
+      const candidate=scoreSolution();
+      if(better(candidate,best))best={
+        used:candidate.used.map(b=>({...b,cuts:b.cuts.slice()})),
+        firstUsed:candidate.firstUsed,
+        waste:candidate.waste,
+        leftoverPieces:candidate.leftoverPieces
+      };
+      return;
+    }
+
+    const cut=cuts[i];
+    // Prune if even the current number of used boards cannot beat the best.
+    const currentlyUsed=boards.reduce((n,b)=>n+(b.cuts.length?1:0),0);
+    if(best && currentlyUsed>best.used.length)return;
+
+    const tried=new Set();
+    // Best-fit first: place into the board leaving the least space.
+    const candidates=boards.map((b,index)=>({b,index,
+      rem:b.len-b.used-(b.cuts.length?kerf:0)-cut
+    })).filter(x=>x.rem>=-eps)
+      .sort((x,y)=>x.rem-y.rem);
+    for(const {b,index} of candidates){
+      const signature=[b.len,b.first?1:0,b.used,b.cuts.length].join(':');
+      if(tried.has(signature))continue;
+      tried.add(signature);
+      const oldUsed=b.used;
+      const add=cut+(b.cuts.length?kerf:0);
+      b.cuts.push(cut); b.used+=add;
+      search(i+1);
+      b.cuts.pop(); b.used=oldUsed;
+      if(nodes>maxNodes)break;
     }
   }
-
-  // Clear selected short/odd stock first, then use regular stock from longest
-  // to shortest. The subset search avoids wasting a board when a better
-  // combination (e.g. 72 + 32 + 16 instead of 72 + 36) exists.
-  const pri=sizes.filter(s=>s.first&&s.qty>0).sort((a,b)=>a.len-b.len);
-  const reg=sizes.filter(s=>!s.first&&s.qty>0).sort((a,b)=>b.len-a.len);
-  fillStock(pri,true);
-  if(remaining.length)fillStock(reg,false);
-  if(remaining.length)return null;
-
-  const priUsed=bins.filter(b=>b.first).reduce((a,b)=>a+b.len,0);
-  const waste=bins.reduce((a,b)=>a+(b.len-b.used),0);
-  const sc=bins.filter(b=>(b.len-b.used)>eps).length;
-  return {
-    pri:priUsed,waste,sc,
-    bins:bins.map(b=>({...b,cuts:b.cuts.slice().sort((x,y)=>y-x)}))
-  };
+  search(0);
+  if(!best)return null;
+  const bins=best.used.map(b=>({
+    len:b.len,first:b.first,used:b.used,
+    cuts:b.cuts.slice().sort((a,b)=>b-a)
+  }));
+  const pri=bins.filter(b=>b.first).reduce((sum,b)=>sum+b.len,0);
+  return {pri,waste:best.waste,sc:best.leftoverPieces,bins};
 }
 
 function run(){
