@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14181b">
+<meta name="description" content="Offline door frame cutting planner">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<title>Door Frame Cut Planner</title>
+<style>
+:root{--bg:#e9ecee;--card:#fff;--ink:#1b2024;--mute:#5d666d;--line:#cfd5d9;--acc:#f5c518;--accink:#1b2024;--seg:#1b2024;--segink:#fff;--bad:#b3261e;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14181b;--card:#1d2327;--ink:#eef1f3;--mute:#9aa4ab;--line:#333c42;--seg:#f5c518;--segink:#1b2024;--bad:#ff8a80;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#14181b;--card:#1d2327;--ink:#eef1f3;--mute:#9aa4ab;--line:#333c42;--seg:#f5c518;--segink:#1b2024;--bad:#ff8a80;color-scheme:dark}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:760px;margin:0 auto;padding:20px 16px 48px}
+h1{font:700 34px/1.1 "Arial Narrow",system-ui,sans-serif;margin:0 0 4px;letter-spacing:.2px}
+h2{font:600 22px/1.2 "Arial Narrow",system-ui,sans-serif;margin:0 0 10px}
+.sub{color:var(--mute);margin:0 0 18px}
+section{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:14px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.chip{font:inherit;font-weight:600;min-width:56px;padding:8px 12px;border:1.5px solid var(--line);background:transparent;color:var(--ink);border-radius:6px;cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--acc);color:var(--accink);border-color:var(--acc)}
+.chip:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
+.row b{font:700 22px "Barlow Condensed",sans-serif;min-width:52px}
+.m{color:var(--mute);min-width:52px}
+.row label{display:flex;align-items:center;gap:8px;color:var(--mute)}
+.row .first{margin-left:auto;font-size:14px}
+.row .first input{width:18px;height:18px;padding:0}
+input,textarea{font:inherit;color:var(--ink);background:var(--bg);border:1.5px solid var(--line);border-radius:6px;padding:8px 10px}
+input[type=number]{width:86px}
+textarea{width:100%;min-height:110px;resize:vertical}
+.x{font:inherit;background:none;border:0;color:var(--mute);font-size:22px;cursor:pointer;padding:0 6px}
+.add{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;color:var(--mute)}
+.btn{font:600 18px "Barlow Condensed",sans-serif;letter-spacing:.3px;padding:10px 18px;border:0;border-radius:6px;background:var(--acc);color:var(--accink);cursor:pointer}
+.btn.alt{background:transparent;color:var(--ink);border:1.5px solid var(--line)}
+.opts{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:12px 0;color:var(--mute)}
+.hint{color:var(--mute);font-size:14px;margin:6px 0 0}
+.err{color:var(--bad);font-weight:600}
+.sum{display:flex;flex-wrap:wrap;gap:18px;margin-bottom:6px}
+.sum div{font-size:14px;color:var(--mute)}
+.sum strong{display:block;font:700 26px "Barlow Condensed",sans-serif;color:var(--ink)}
+.piece{padding:12px 0;border-top:1px solid var(--line)}
+.line{font-weight:500;margin-bottom:8px;overflow-wrap:anywhere}
+.line .lbl{font-weight:700}
+.line .off{color:var(--mute);font-weight:400}
+.bar{display:flex;gap:2px;height:30px;border-radius:4px;overflow:hidden;background:var(--bg)}
+.seg{display:flex;align-items:center;justify-content:center;background:var(--seg);color:var(--segink);font:600 13px "Barlow Condensed",sans-serif;min-width:0;overflow:hidden}
+.left{background:repeating-linear-gradient(45deg,var(--line) 0 5px,transparent 5px 10px)}
+.actions{display:flex;gap:10px;margin-top:12px;align-items:center}
+</style>
+</head>
+<body>
+<main>
+<h1>Door frame cut planner</h1>
+<p class="sub">Pick the stock you have, enter the customer’s cuts, and get a cut plan for each piece.</p>
+
+<section>
+<h2>1. Stock on hand</h2>
+<div class="chips" id="chips"></div>
+<div id="rows"></div>
+<div class="add">Other size (feet): <input type="number" id="custom" min="1" step="0.5" inputmode="decimal" aria-label="Custom stock size in feet"><button class="btn alt" id="addCustom" type="button">Add size</button></div>
+<p class="hint">Leave “On hand” blank if you have plenty of that size. Tick “Use first” on short or odd lengths you want to clear: the plan fills those before touching regular stock. Sizes you add yourself are ticked automatically.</p>
+</section>
+
+<section>
+<h2>2. Customer’s cuts (inches)</h2>
+<textarea id="cuts" aria-label="Cut list" placeholder='32" = 2&#10;72" = 2&#10;16" = 2'>32" = 2
+72" = 2
+16" = 2</textarea>
+<p class="hint">One per line or all in a row: length = how many. Use 5' for feet.</p>
+<div class="opts"><label>Saw blade width (in) <input type="number" id="kerf" min="0" step="0.0625" value="0" inputmode="decimal"></label></div>
+<button class="btn" id="go" type="button">Make cut plan</button>
+</section>
+
+<section id="outWrap" hidden>
+<h2>Cut plan</h2>
+<div id="out"></div>
+</section>
+</main>
+<script>
+const STD=[6,6.5,7,7.5,8,8.5,9,10,11,12,13,14];
+let stock={};
+try{stock=JSON.parse(localStorage.getItem('stock')||'{}')||{}}catch(e){stock={}}
+for(const k in stock){if(typeof stock[k]!=='object'||stock[k]===null)stock[k]={q:stock[k]==null?'':String(stock[k]),f:false}}
+const $=id=>document.getElementById(id);
+const save=()=>{try{localStorage.setItem('stock',JSON.stringify(stock))}catch(e){}};
+const r2=n=>Math.round(n*100)/100;
+function ft(f){const w=Math.floor(f+1e-9),i=r2((f-w)*12);return w+"'"+(i?i+'"':'')}
+const keys=()=>Object.keys(stock).map(Number).sort((a,b)=>a-b);
+
+function renderStock(){
+  $('chips').innerHTML=STD.map(s=>`<button type="button" class="chip" data-ft="${s}" aria-pressed="${s in stock}">${ft(s)}</button>`).join('');
+  const k=keys();
+  $('rows').innerHTML=k.length?k.map(s=>`<div class="row"><b>${ft(s)}</b><span class="m">${r2(s*12)}"</span><label>On hand <input type="number" min="0" inputmode="numeric" placeholder="any" data-q="${s}" value="${stock[s].q}"></label><label class="first"><input type="checkbox" data-f="${s}"${stock[s].f?' checked':''}> Use first</label><button type="button" class="x" data-rm="${s}" aria-label="Remove ${ft(s)}">×</button></div>`).join(''):'<p class="hint">No sizes selected yet. Tap the sizes you have.</p>';
+}
+$('chips').addEventListener('click',e=>{const b=e.target.closest('[data-ft]');if(!b)return;const s=b.dataset.ft;if(s in stock)delete stock[s];else stock[s]={q:'',f:false};save();renderStock()});
+$('rows').addEventListener('click',e=>{const b=e.target.closest('[data-rm]');if(!b)return;delete stock[b.dataset.rm];save();renderStock()});
+$('rows').addEventListener('input',e=>{const t=e.target;if(t.dataset.q!==undefined)stock[t.dataset.q].q=t.value;else if(t.dataset.f!==undefined)stock[t.dataset.f].f=t.checked;else return;save()});
+$('addCustom').addEventListener('click',()=>{const v=parseFloat($('custom').value);if(v>0){if(!(v in stock))stock[v]={q:'',f:true};save();renderStock();$('custom').value=''}});
+
+function parseCuts(t){
+  t=t.replace(/[“”″]/g,'"').replace(/[’′]/g,"'");
+  const re=/(\d+(?:\.\d+)?)\s*(['"]?)\s*(?:=|x|X|\*|×)\s*(\d+)/g,out=[];let m;
+  while((m=re.exec(t))){let L=parseFloat(m[1]);if(m[2]==="'")L*=12;out.push([L,parseInt(m[3],10)])}
+  return out;
+}
+
+function plan(pieces,sizes,kerf){
+  // Order of priority: fill use-first stock, least total waste, leftover in the fewest pieces, fewest pieces.
+  const reg=sizes.filter(s=>!s.first&&s.qty>0),pri=sizes.filter(s=>s.first&&s.qty>0);
+  const total=pieces.reduce((a,b)=>a+b,0),slots0=[];
+  pri.forEach(s=>{const n=Math.min(s.qty,Math.ceil(total/s.len));for(let i=0;i<n;i++)slots0.push(s.len)});
+  const maxL=reg.length?Math.max(...reg.map(s=>s.len)):0;
+  let best=null;
+  for(let it=0;it<600;it++){
+    const J=it===0?0:(it%2?25:80);
+    let rest=pieces.map(p=>[p+(Math.random()-.5)*J,p]).sort((a,b)=>b[0]-a[0]).map(x=>x[1]);
+    const bins=[],slots=slots0.slice();let priUsed=0;
+    if(it>0)slots.sort(()=>Math.random()-.5);
+    for(const len of slots){
+      if(!rest.length)break;
+      const b={cuts:[],used:0,len,first:true},keep=[];
+      for(const p of rest){if(b.used+p+kerf<=len+kerf+1e-9){b.cuts.push(p);b.used+=p+kerf}else keep.push(p)}
+      if(b.cuts.length){bins.push(b);priUsed+=len;rest=keep}
+    }
+    if(rest.length&&(!reg.length||rest.some(p=>p>maxL)))continue;
+    const rb=[];
+    for(const p of rest){
+      const need=p+kerf;let bi=-1,br=Infinity;
+      for(let i=0;i<rb.length;i++){const r=maxL+kerf-rb[i].used-need;if(r>=-1e-9&&r<br){br=r;bi=i}}
+      if(bi<0)rb.push({cuts:[p],used:need});else{rb[bi].cuts.push(p);rb[bi].used+=need}
+    }
+    rb.sort((a,b)=>b.used-a.used);
+    const left=reg.map(s=>({...s}));let ok=true;
+    for(const b of rb){
+      let c=null;
+      for(const s of left)if(s.qty>0&&s.len+kerf>=b.used-1e-9&&(!c||s.len<c.len))c=s;
+      if(!c){ok=false;break}
+      c.qty--;b.len=c.len;
+    }
+    if(!ok)continue;
+    const all=bins.concat(rb),waste=all.reduce((a,b)=>a+b.len+kerf-b.used,0),sc=all.filter(b=>b.len+kerf-b.used>1e-9).length;
+    const eq=(x,y)=>Math.abs(x-y)<1e-9;
+    const better=!best||priUsed>best.pri+1e-9||(eq(priUsed,best.pri)&&(waste<best.waste-1e-9||(eq(waste,best.waste)&&(sc<best.sc||(sc===best.sc&&all.length<best.bins.length)))));
+    if(better)best={pri:priUsed,waste,sc,bins:all.map(b=>({...b,cuts:b.cuts.slice().sort((x,y)=>y-x)}))};
+  }
+  return best;
+}
+
+function run(){
+  const out=$('out');$('outWrap').hidden=false;
+  const sizes=keys().map(s=>({len:s*12,first:!!stock[s].f,qty:stock[s].q===''?Infinity:Math.max(0,parseInt(stock[s].q,10)||0)}));
+  const cuts=parseCuts($('cuts').value),kerf=Math.max(0,parseFloat($('kerf').value)||0);
+  if(!sizes.length){out.innerHTML='<p class="err">Pick at least one stock size first.</p>';return}
+  if(!cuts.length){out.innerHTML='<p class="err">No cuts found. Enter them like 32" = 2.</p>';return}
+  const pieces=[];cuts.forEach(([L,q])=>{for(let i=0;i<q;i++)pieces.push(L)});
+  const maxL=Math.max(...sizes.map(s=>s.len));
+  const tooLong=pieces.filter(p=>p+0>maxL);
+  if(tooLong.length){out.innerHTML=`<p class="err">${r2(Math.max(...tooLong))}" is longer than your longest stock (${ft(maxL/12)}). Add a longer size.</p>`;return}
+  const res=plan(pieces,sizes,kerf);
+  const need=r2(pieces.reduce((a,b)=>a+b,0));
+  if(!res){
+    const avail=sizes.reduce((a,s)=>a+s.len*s.qty,0);
+    out.innerHTML=`<p class="err">Your stock on hand can’t cover this order.</p><p>The cuts add up to ${need}". Stock on hand: ${isFinite(avail)?r2(avail)+'"':'unlimited'}. Add more stock or another size and try again.</p>`;return}
+  const groups={};res.bins.forEach(b=>{(groups[b.len]=groups[b.len]||[]).push(b)});
+  const lens=Object.keys(groups).map(Number).sort((a,b)=>b-a);
+  const lines=[];let html='';
+  const counts=lens.map(l=>`${groups[l].length} × ${ft(l/12)}`).join(', ');
+  const waste=r2(res.bins.reduce((a,b)=>a+b.len-b.cuts.reduce((x,y)=>x+y,0),0));
+  html+=`<div class="sum"><div><strong>${res.bins.length}</strong>pieces of stock</div><div><strong>${counts}</strong>stock to pull</div><div><strong>${waste?waste+'"':'None'}</strong>left over</div></div>`;
+  lens.forEach(l=>groups[l].forEach((b,i)=>{
+    const total=r2(b.cuts.reduce((x,y)=>x+y,0)),rest=r2(l-total);
+    const label=`${ft(l/12)} piece #${i+1}:`,eq=b.cuts.map(c=>r2(c)+'"').join(' + ')+` = ${total}"`;
+    lines.push(`${label} ${eq}`+(rest>0?` (${rest}" left over)`:''));
+    html+=`<div class="piece"><div class="line"><span class="lbl">${label}</span> ${eq} <span class="off">${rest>0?'· '+rest+'" left over':'· no waste'}${b.first?' · use-first stock':''}</span></div><div class="bar" role="img" aria-label="${eq}">${b.cuts.map(c=>`<div class="seg" style="flex:${c} 0 0">${r2(c)}"</div>`).join('')}${rest>0?`<div class="seg left" style="flex:${rest} 0 0"></div>`:''}</div></div>`;
+  }));
+  html+=`<div class="actions"><button class="btn alt" id="copy" type="button">Copy plan</button><span class="hint" id="cmsg"></span></div>`;
+  out.innerHTML=html;
+  $('copy').onclick=async()=>{
+    try{await navigator.clipboard.writeText(lines.join('\n'));$('cmsg').textContent='Copied'}
+    catch(e){$('cmsg').textContent='Copy isn’t available here. Select the text above instead.'}
+  };
+}
+$('go').addEventListener('click',run);
+// Restore and save the customer's cut list and saw-blade width on this device.
+try {
+  const savedCuts = localStorage.getItem('customerCuts');
+  const savedKerf = localStorage.getItem('sawKerf');
+  if (savedCuts !== null) $('cuts').value = savedCuts;
+  if (savedKerf !== null) $('kerf').value = savedKerf;
+} catch (e) {}
+$('cuts').addEventListener('input', () => {
+  try { localStorage.setItem('customerCuts', $('cuts').value); } catch (e) {}
+});
+$('kerf').addEventListener('input', () => {
+  try { localStorage.setItem('sawKerf', $('kerf').value); } catch (e) {}
+});
+
+// Register the offline app shell. This requires HTTPS (or localhost).
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js').catch(() => {});
+  });
+}
+renderStock();
+</script>
+</body>
+</html>
