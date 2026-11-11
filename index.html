@@ -3,21 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#14181b">
-<meta name="description" content="Offline door frame cutting planner">
-<link rel="manifest" href="manifest.json">
-<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
-<link rel="apple-touch-icon" href="icons/icon-192.png">
 <title>Door Frame Cut Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#e9ecee;--card:#fff;--ink:#1b2024;--mute:#5d666d;--line:#cfd5d9;--acc:#f5c518;--accink:#1b2024;--seg:#1b2024;--segink:#fff;--bad:#b3261e;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14181b;--card:#1d2327;--ink:#eef1f3;--mute:#9aa4ab;--line:#333c42;--seg:#f5c518;--segink:#1b2024;--bad:#ff8a80;color-scheme:dark}}
 :root[data-theme="dark"]{--bg:#14181b;--card:#1d2327;--ink:#eef1f3;--mute:#9aa4ab;--line:#333c42;--seg:#f5c518;--segink:#1b2024;--bad:#ff8a80;color-scheme:dark}
 *,*::before,*::after{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 Barlow,system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:760px;margin:0 auto;padding:20px 16px 48px}
-h1{font:700 34px/1.1 "Arial Narrow",system-ui,sans-serif;margin:0 0 4px;letter-spacing:.2px}
-h2{font:600 22px/1.2 "Arial Narrow",system-ui,sans-serif;margin:0 0 10px}
+h1{font:700 34px/1.1 "Barlow Condensed","Arial Narrow",sans-serif;margin:0 0 4px;letter-spacing:.2px}
+h2{font:600 22px/1.2 "Barlow Condensed","Arial Narrow",sans-serif;margin:0 0 10px}
 .sub{color:var(--mute);margin:0 0 18px}
 section{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:14px}
 .chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
@@ -68,10 +65,10 @@ textarea{width:100%;min-height:110px;resize:vertical}
 
 <section>
 <h2>2. Customer’s cuts (inches)</h2>
-<textarea id="cuts" aria-label="Cut list" placeholder='32" = 2&#10;72" = 2&#10;16" = 2'>32" = 2
-72" = 2
-16" = 2</textarea>
-<p class="hint">One per line or all in a row: length = how many. Use 5' for feet.</p>
+<textarea id="cuts" aria-label="Cut list" placeholder="32 = 2&#10;72 = 2&#10;16 = 2">32 = 2
+72 = 2
+16 = 2</textarea>
+<p class="hint">Enter lengths in inches without symbols: 32 = 2. One per line or all in a row. Use 5&#39; only when entering feet.</p>
 <div class="opts"><label>Saw blade width (in) <input type="number" id="kerf" min="0" step="0.0625" value="0" inputmode="decimal"></label></div>
 <button class="btn" id="go" type="button">Make cut plan</button>
 </section>
@@ -110,45 +107,73 @@ function parseCuts(t){
 }
 
 function plan(pieces,sizes,kerf){
-  // Order of priority: fill use-first stock, least total waste, leftover in the fewest pieces, fewest pieces.
-  const reg=sizes.filter(s=>!s.first&&s.qty>0),pri=sizes.filter(s=>s.first&&s.qty>0);
-  const total=pieces.reduce((a,b)=>a+b,0),slots0=[];
-  pri.forEach(s=>{const n=Math.min(s.qty,Math.ceil(total/s.len));for(let i=0;i<n;i++)slots0.push(s.len)});
-  const maxL=reg.length?Math.max(...reg.map(s=>s.len)):0;
-  let best=null;
-  for(let it=0;it<600;it++){
-    const J=it===0?0:(it%2?25:80);
-    let rest=pieces.map(p=>[p+(Math.random()-.5)*J,p]).sort((a,b)=>b[0]-a[0]).map(x=>x[1]);
-    const bins=[],slots=slots0.slice();let priUsed=0;
-    if(it>0)slots.sort(()=>Math.random()-.5);
-    for(const len of slots){
-      if(!rest.length)break;
-      const b={cuts:[],used:0,len,first:true},keep=[];
-      for(const p of rest){if(b.used+p+kerf<=len+kerf+1e-9){b.cuts.push(p);b.used+=p+kerf}else keep.push(p)}
-      if(b.cuts.length){bins.push(b);priUsed+=len;rest=keep}
+  // Deterministic best-fit packing. For each available stock length, search
+  // combinations of remaining cuts and choose the subset that uses the most
+  // of that board (including kerf between cuts).
+  const remaining=pieces.slice().sort((a,b)=>b-a);
+  const bins=[];
+  const eps=1e-9;
+
+  function bestSubset(capacity){
+    const arr=remaining;
+    const n=arr.length;
+    let best=[],bestUsed=0,nodes=0;
+    const suffix=new Array(n+1).fill(0);
+    for(let i=n-1;i>=0;i--)suffix[i]=suffix[i+1]+arr[i];
+
+    function visit(i,used,chosen){
+      if(++nodes>250000)return;
+      if(used>bestUsed+eps){
+        bestUsed=used;
+        best=chosen.slice();
+        if(capacity-bestUsed<eps)return;
+      }
+      if(i>=n||used+suffix[i]<bestUsed-eps)return;
+      // A cut can only be added if its length plus the kerf between cuts fits.
+      const add=arr[i]+(chosen.length?kerf:0);
+      if(used+add<=capacity+eps){
+        chosen.push(i);
+        visit(i+1,used+add,chosen);
+        chosen.pop();
+      }
+      visit(i+1,used,chosen);
     }
-    if(rest.length&&(!reg.length||rest.some(p=>p>maxL)))continue;
-    const rb=[];
-    for(const p of rest){
-      const need=p+kerf;let bi=-1,br=Infinity;
-      for(let i=0;i<rb.length;i++){const r=maxL+kerf-rb[i].used-need;if(r>=-1e-9&&r<br){br=r;bi=i}}
-      if(bi<0)rb.push({cuts:[p],used:need});else{rb[bi].cuts.push(p);rb[bi].used+=need}
-    }
-    rb.sort((a,b)=>b.used-a.used);
-    const left=reg.map(s=>({...s}));let ok=true;
-    for(const b of rb){
-      let c=null;
-      for(const s of left)if(s.qty>0&&s.len+kerf>=b.used-1e-9&&(!c||s.len<c.len))c=s;
-      if(!c){ok=false;break}
-      c.qty--;b.len=c.len;
-    }
-    if(!ok)continue;
-    const all=bins.concat(rb),waste=all.reduce((a,b)=>a+b.len+kerf-b.used,0),sc=all.filter(b=>b.len+kerf-b.used>1e-9).length;
-    const eq=(x,y)=>Math.abs(x-y)<1e-9;
-    const better=!best||priUsed>best.pri+1e-9||(eq(priUsed,best.pri)&&(waste<best.waste-1e-9||(eq(waste,best.waste)&&(sc<best.sc||(sc===best.sc&&all.length<best.bins.length)))));
-    if(better)best={pri:priUsed,waste,sc,bins:all.map(b=>({...b,cuts:b.cuts.slice().sort((x,y)=>y-x)}))};
+    visit(0,0,[]);
+    return best;
   }
-  return best;
+
+  function fillStock(stockList,first){
+    for(const s of stockList){
+      const qty=Number.isFinite(s.qty)
+        ? Math.min(s.qty,remaining.length)
+        : remaining.length;
+      for(let n=0;n<qty&&remaining.length;n++){
+        const chosen=bestSubset(s.len);
+        if(!chosen.length)break;
+        const cuts=chosen.map(i=>remaining[i]);
+        for(const i of chosen.slice().sort((x,y)=>y-x))remaining.splice(i,1);
+        const used=cuts.reduce((sum,c)=>sum+c,0)+kerf*Math.max(0,cuts.length-1);
+        bins.push({cuts,used,len:s.len,first});
+      }
+    }
+  }
+
+  // Clear selected short/odd stock first, then use regular stock from longest
+  // to shortest. The subset search avoids wasting a board when a better
+  // combination (e.g. 72 + 32 + 16 instead of 72 + 36) exists.
+  const pri=sizes.filter(s=>s.first&&s.qty>0).sort((a,b)=>a.len-b.len);
+  const reg=sizes.filter(s=>!s.first&&s.qty>0).sort((a,b)=>b.len-a.len);
+  fillStock(pri,true);
+  if(remaining.length)fillStock(reg,false);
+  if(remaining.length)return null;
+
+  const priUsed=bins.filter(b=>b.first).reduce((a,b)=>a+b.len,0);
+  const waste=bins.reduce((a,b)=>a+(b.len-b.used),0);
+  const sc=bins.filter(b=>(b.len-b.used)>eps).length;
+  return {
+    pri:priUsed,waste,sc,
+    bins:bins.map(b=>({...b,cuts:b.cuts.slice().sort((x,y)=>y-x)}))
+  };
 }
 
 function run(){
@@ -170,10 +195,10 @@ function run(){
   const lens=Object.keys(groups).map(Number).sort((a,b)=>b-a);
   const lines=[];let html='';
   const counts=lens.map(l=>`${groups[l].length} × ${ft(l/12)}`).join(', ');
-  const waste=r2(res.bins.reduce((a,b)=>a+b.len-b.cuts.reduce((x,y)=>x+y,0),0));
+  const waste=r2(res.bins.reduce((a,b)=>a+Math.max(0,b.len-b.cuts.reduce((x,y)=>x+y,0)-kerf*Math.max(0,b.cuts.length-1)),0));
   html+=`<div class="sum"><div><strong>${res.bins.length}</strong>pieces of stock</div><div><strong>${counts}</strong>stock to pull</div><div><strong>${waste?waste+'"':'None'}</strong>left over</div></div>`;
   lens.forEach(l=>groups[l].forEach((b,i)=>{
-    const total=r2(b.cuts.reduce((x,y)=>x+y,0)),rest=r2(l-total);
+    const total=r2(b.cuts.reduce((x,y)=>x+y,0)),rest=r2(Math.max(0,l-total-kerf*Math.max(0,b.cuts.length-1)));
     const label=`${ft(l/12)} piece #${i+1}:`,eq=b.cuts.map(c=>r2(c)+'"').join(' + ')+` = ${total}"`;
     lines.push(`${label} ${eq}`+(rest>0?` (${rest}" left over)`:''));
     html+=`<div class="piece"><div class="line"><span class="lbl">${label}</span> ${eq} <span class="off">${rest>0?'· '+rest+'" left over':'· no waste'}${b.first?' · use-first stock':''}</span></div><div class="bar" role="img" aria-label="${eq}">${b.cuts.map(c=>`<div class="seg" style="flex:${c} 0 0">${r2(c)}"</div>`).join('')}${rest>0?`<div class="seg left" style="flex:${rest} 0 0"></div>`:''}</div></div>`;
@@ -186,26 +211,6 @@ function run(){
   };
 }
 $('go').addEventListener('click',run);
-// Restore and save the customer's cut list and saw-blade width on this device.
-try {
-  const savedCuts = localStorage.getItem('customerCuts');
-  const savedKerf = localStorage.getItem('sawKerf');
-  if (savedCuts !== null) $('cuts').value = savedCuts;
-  if (savedKerf !== null) $('kerf').value = savedKerf;
-} catch (e) {}
-$('cuts').addEventListener('input', () => {
-  try { localStorage.setItem('customerCuts', $('cuts').value); } catch (e) {}
-});
-$('kerf').addEventListener('input', () => {
-  try { localStorage.setItem('sawKerf', $('kerf').value); } catch (e) {}
-});
-
-// Register the offline app shell. This requires HTTPS (or localhost).
-if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./service-worker.js').catch(() => {});
-  });
-}
 renderStock();
 </script>
 </body>
