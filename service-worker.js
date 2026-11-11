@@ -1,4 +1,4 @@
-const CACHE_NAME = 'door-frame-cut-planner-v1';
+const CACHE_NAME = 'door-frame-cut-planner-v3';
 const APP_FILES = [
   './',
   './index.html',
