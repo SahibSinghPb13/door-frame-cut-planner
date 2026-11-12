@@ -109,74 +109,87 @@ function parseCuts(t){
 }
 
 function plan(pieces,sizes,kerf){
-  // Exact global cutting-stock search. It explores feasible combinations for
-  // every stock length instead of greedily filling one length at a time.
+  // Precompute every feasible cutting pattern once per stock length.
+  // The recursive optimizer then works only with count vectors, avoiding
+  // repeated pattern enumeration at every search state.
   const typeLengths=[...new Set(pieces)].sort((a,b)=>b-a);
   const initial=typeLengths.map(L=>pieces.filter(p=>p===L).length);
-  // If a stock size has at least as many pieces as the entire order has cuts,
-  // its quantity can never run out. Treat it as unlimited in the search state.
-  // This removes irrelevant quantity permutations and keeps exact optimization
-  // fast when (for example) 20 pieces of every stock size are available.
-  const stockList=sizes.filter(s=>s.qty>0).map(s=>({...s,qty:s.qty>=pieces.length?Infinity:s.qty}));
   const EPS=1e-9;
-  let visited=0,tooComplex=false;
-  const memo=new Map();
+  const stockList=sizes.filter(s=>s.qty>0).map(s=>({
+    ...s,
+    qty:s.qty>=pieces.length?Infinity:s.qty
+  }));
 
   function better(a,b){
     if(!b)return true;
-    if(Math.abs(a.pri-b.pri)>EPS)return a.pri>b.pri;
+    // Honor explicitly marked "Use first" stock, then optimize the plan.
+    if(a.pri!==b.pri)return a.pri>b.pri;
+    if(a.bins.length!==b.bins.length)return a.bins.length<b.bins.length;
     if(Math.abs(a.total-b.total)>EPS)return a.total<b.total;
     if(Math.abs(a.waste-b.waste)>EPS)return a.waste<b.waste;
-    return a.bins.length<b.bins.length;
+    return false;
   }
 
-  function solve(counts,stockRemaining){
+  const allPatterns=stockList.map(stock=>{
+    const patterns=[];
+    const pc=new Array(typeLengths.length).fill(0);
+    function enumerate(i,used,pieceCount){
+      if(used>stock.len+EPS)return;
+      if(i===typeLengths.length){
+        if(pieceCount===0)return;
+        const cutTotal=pc.reduce((sum,n,j)=>sum+n*typeLengths[j],0);
+        const actualWaste=stock.len-cutTotal-kerf*Math.max(0,pieceCount-1);
+        patterns.push({
+          counts:pc.slice(),
+          cutTotal,
+          n:pieceCount,
+          waste:Math.max(0,actualWaste)
+        });
+        return;
+      }
+      const L=typeLengths[i];
+      const max=Math.min(initial[i],Math.floor((stock.len-used+EPS)/(L+(pieceCount?kerf:0))));
+      for(let n=max;n>=0;n--){
+        pc[i]=n;
+        const added=n*L+kerf*(n>0?Math.max(0,pieceCount+n-1)-Math.max(0,pieceCount-1):0);
+        enumerate(i+1,used+added,pieceCount+n);
+      }
+      pc[i]=0;
+    }
+    enumerate(0,0,0);
+    patterns.sort((a,b)=>b.cutTotal-a.cutTotal || a.waste-b.waste || b.n-a.n);
+    return patterns;
+  });
+
+  let visited=0;
+  const memo=new Map();
+  function solve(counts,remaining){
     if(counts.every(n=>n===0))return {pri:0,total:0,waste:0,bins:[]};
-    const key=counts.join(',')+'|'+stockRemaining.map((q,i)=>Number.isFinite(q)?q:'*').join(',');
-    // Check previously calculated states BEFORE counting new states.
+    const key=counts.join(',')+'|'+remaining.map(q=>Number.isFinite(q)?q:'*').join(',');
     if(memo.has(key))return memo.get(key);
-    if(++visited>250000){tooComplex=true;return null;}
+    if(++visited>250000)return null;
 
-    const anchor=counts.findIndex(n=>n>0); // longest remaining cut
+    const anchor=counts.findIndex(n=>n>0);
     let best=null;
-
     for(let si=0;si<stockList.length;si++){
       const stock=stockList[si];
-      if(stockRemaining[si]===0 || stock.len+EPS<typeLengths[anchor])continue;
-      const patternCounts=new Array(counts.length).fill(0);
-      const patterns=[];
-
-      function enumerate(i,used,pieceCount){
-        if(used>stock.len+EPS)return;
-        if(i===counts.length){
-          if(patternCounts[anchor]>0){
-            const pc=patternCounts.slice();
-            const cutTotal=pc.reduce((sum,n,j)=>sum+n*typeLengths[j],0);
-            const n=pc.reduce((a,b)=>a+b,0);
-            const actualWaste=stock.len-cutTotal-kerf*Math.max(0,n-1);
-            patterns.push({counts:pc,cutTotal,n,waste:Math.max(0,actualWaste)});
-          }
-          return;
+      if(remaining[si]===0 || stock.len+EPS<typeLengths[anchor])continue;
+      for(const pat of allPatterns[si]){
+        if(pat.counts[anchor]===0)continue;
+        let fits=true;
+        for(let j=0;j<counts.length;j++){
+          if(pat.counts[j]>counts[j]){fits=false;break;}
         }
-        const L=typeLengths[i];
-        const max=Math.min(counts[i],Math.floor((stock.len-used+EPS)/(L+(pieceCount?kerf:0))));
-        for(let n=max;n>=0;n--){
-          patternCounts[i]=n;
-          enumerate(i+1,used+n*L+kerf*(n>0?Math.max(0,pieceCount+n-1)-Math.max(0,pieceCount-1):0),pieceCount+n);
-        }
-        patternCounts[i]=0;
-      }
-      enumerate(0,0,0);
-      patterns.sort((a,b)=>b.cutTotal-a.cutTotal || a.waste-b.waste || b.n-a.n);
+        if(!fits)continue;
 
-      for(const pat of patterns){
-        const nextCounts=counts.map((n,i)=>n-pat.counts[i]);
-        const nextStock=stockRemaining.slice();
-        if(Number.isFinite(nextStock[si]))nextStock[si]--;
-        const child=solve(nextCounts,nextStock);
+        const nextCounts=counts.map((n,j)=>n-pat.counts[j]);
+        const nextRemaining=remaining.slice();
+        if(Number.isFinite(nextRemaining[si]))nextRemaining[si]--;
+        const child=solve(nextCounts,nextRemaining);
         if(!child)continue;
+
         const cuts=[];
-        pat.counts.forEach((n,i)=>{for(let k=0;k<n;k++)cuts.push(typeLengths[i]);});
+        pat.counts.forEach((n,j)=>{for(let k=0;k<n;k++)cuts.push(typeLengths[j]);});
         const candidate={
           pri:child.pri+(stock.first?stock.len:0),
           total:child.total+stock.len,
@@ -190,13 +203,11 @@ function plan(pieces,sizes,kerf){
     return best;
   }
 
-  const initialStock=stockList.map(s=>s.qty);
-  const result=solve(initial,initialStock);
-  if(tooComplex)return {tooComplex:true};
+  const result=solve(initial,stockList.map(s=>s.qty));
+  if(visited>250000)return {tooComplex:true};
   if(!result)return null;
   return {...result,sc:result.bins.filter(b=>b.waste>EPS).length};
 }
-
 function run(){
   const out=$('out');$('outWrap').hidden=false;
   const sizes=keys().map(s=>({len:s*12,first:!!stock[s].f,qty:stock[s].q===''?Infinity:Math.max(0,parseInt(stock[s].q,10)||0)}));
