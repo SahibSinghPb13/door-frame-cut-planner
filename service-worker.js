@@ -1,4 +1,5 @@
-const CACHE_NAME = 'door-frame-cut-planner-v6';
+
+const CACHE_NAME = 'door-frame-cut-planner-v7';
 
 const APP_FILES = [
   './',
@@ -20,7 +21,10 @@ self.addEventListener('activate', event => {
     caches.keys().then(keys =>
       Promise.all(
         keys
-          .filter(key => key !== CACHE_NAME)
+          .filter(key =>
+            key.startsWith('door-frame-cut-planner') &&
+            key !== CACHE_NAME
+          )
           .map(key => caches.delete(key))
       )
     )
