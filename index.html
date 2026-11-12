@@ -3,10 +3,6 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#14181b">
-<meta name="description" content="Offline door frame cutting planner">
-<link rel="manifest" href="./manifest.json">
-<link rel="apple-touch-icon" href="./icons/icon-192.png">
 <title>Door Frame Cut Planner</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap" rel="stylesheet">
@@ -72,7 +68,7 @@ textarea{width:100%;min-height:110px;resize:vertical}
 <textarea id="cuts" aria-label="Cut list" placeholder="32 = 2&#10;72 = 2&#10;16 = 2">32 = 2
 72 = 2
 16 = 2</textarea>
-<p class="hint">Enter lengths in inches without symbols: 32 = 2. One per line or all in a row. Use 5&#39; only when entering feet.</p>
+<p class="hint">Enter lengths in inches without symbols: 32 = 2. One per line or all in a row. Use 5&#39; only when entering feet. The planner searches all selected stock lengths for the lowest-waste overall combination.</p>
 <div class="opts"><label>Saw blade width (in) <input type="number" id="kerf" min="0" step="0.0625" value="0" inputmode="decimal"></label></div>
 <button class="btn" id="go" type="button">Make cut plan</button>
 </section>
@@ -111,86 +107,86 @@ function parseCuts(t){
 }
 
 function plan(pieces,sizes,kerf){
-  // Global backtracking bin-packing: assign every cut across all available
-  // stock boards together. This avoids greedy early choices that can make a
-  // feasible order appear impossible.
-  const cuts=pieces.slice().sort((a,b)=>b-a);
-  const eps=1e-9;
-  const boards=[];
-  const limit=Math.max(1,cuts.length);
-  for(const s of sizes){
-    const qty=Number.isFinite(s.qty)?Math.min(s.qty,limit):limit;
-    for(let i=0;i<qty;i++) boards.push({
-      len:s.len, first:!!s.first, cuts:[], used:0
-    });
-  }
-  boards.sort((a,b)=>(Number(b.first)-Number(a.first)) || b.len-a.len);
+  // Exact global cutting-stock search. It explores feasible combinations for
+  // every stock length instead of greedily filling one length at a time.
+  const typeLengths=[...new Set(pieces)].sort((a,b)=>b-a);
+  const initial=typeLengths.map(L=>pieces.filter(p=>p===L).length);
+  const stockList=sizes.filter(s=>s.qty>0).map(s=>({...s,remaining:s.qty}));
+  const EPS=1e-9;
+  let visited=0,tooComplex=false;
+  const memo=new Map();
 
-  if(!boards.length)return null;
-  let best=null, nodes=0;
-  const maxNodes=2000000;
-  const suffix=new Array(cuts.length+1).fill(0);
-  for(let i=cuts.length-1;i>=0;i--)suffix[i]=suffix[i+1]+cuts[i];
-
-  function scoreSolution(){
-    const used=boards.filter(b=>b.cuts.length);
-    const firstUsed=used.filter(b=>b.first).length;
-    const waste=used.reduce((sum,b)=>sum+b.len-b.used,0);
-    const leftoverPieces=used.filter(b=>b.len-b.used>eps).length;
-    return {used,firstUsed,waste,leftoverPieces};
-  }
-  function better(x,y){
-    if(!y)return true;
-    if(x.used.length!==y.used.length)return x.used.length<y.used.length;
-    if(x.firstUsed!==y.firstUsed)return x.firstUsed>y.firstUsed;
-    if(Math.abs(x.waste-y.waste)>eps)return x.waste<y.waste;
-    return x.leftoverPieces<y.leftoverPieces;
+  function better(a,b){
+    if(!b)return true;
+    if(Math.abs(a.pri-b.pri)>EPS)return a.pri>b.pri;
+    if(Math.abs(a.total-b.total)>EPS)return a.total<b.total;
+    if(Math.abs(a.waste-b.waste)>EPS)return a.waste<b.waste;
+    return a.bins.length<b.bins.length;
   }
 
-  function search(i){
-    if(++nodes>maxNodes)return;
-    if(i===cuts.length){
-      const candidate=scoreSolution();
-      if(better(candidate,best))best={
-        used:candidate.used.map(b=>({...b,cuts:b.cuts.slice()})),
-        firstUsed:candidate.firstUsed,
-        waste:candidate.waste,
-        leftoverPieces:candidate.leftoverPieces
-      };
-      return;
+  function solve(counts,stockRemaining){
+    if(counts.every(n=>n===0))return {pri:0,total:0,waste:0,bins:[]};
+    if(++visited>250000){tooComplex=true;return null;}
+    const key=counts.join(',')+'|'+stockRemaining.map((q,i)=>Number.isFinite(q)?q:'*').join(',');
+    if(memo.has(key))return memo.get(key);
+    const anchor=counts.findIndex(n=>n>0); // longest remaining cut
+    let best=null;
+
+    for(let si=0;si<stockList.length;si++){
+      const stock=stockList[si];
+      if(stockRemaining[si]===0 || stock.len+EPS<typeLengths[anchor])continue;
+      const patternCounts=new Array(counts.length).fill(0);
+      const patterns=[];
+
+      function enumerate(i,used,pieceCount){
+        if(used>stock.len+EPS)return;
+        if(i===counts.length){
+          if(patternCounts[anchor]>0){
+            const pc=patternCounts.slice();
+            const cutTotal=pc.reduce((sum,n,j)=>sum+n*typeLengths[j],0);
+            const n=pc.reduce((a,b)=>a+b,0);
+            const actualWaste=stock.len-cutTotal-kerf*Math.max(0,n-1);
+            patterns.push({counts:pc,cutTotal,n,waste:Math.max(0,actualWaste)});
+          }
+          return;
+        }
+        const L=typeLengths[i];
+        const max=Math.min(counts[i],Math.floor((stock.len-used+EPS)/(L+(pieceCount?kerf:0))));
+        for(let n=max;n>=0;n--){
+          patternCounts[i]=n;
+          enumerate(i+1,used+n*L+kerf*(n>0?Math.max(0,pieceCount+n-1)-Math.max(0,pieceCount-1):0),pieceCount+n);
+        }
+        patternCounts[i]=0;
+      }
+      enumerate(0,0,0);
+      patterns.sort((a,b)=>b.cutTotal-a.cutTotal || a.waste-b.waste || b.n-a.n);
+
+      for(const pat of patterns){
+        const nextCounts=counts.map((n,i)=>n-pat.counts[i]);
+        const nextStock=stockRemaining.slice();
+        if(Number.isFinite(nextStock[si]))nextStock[si]--;
+        const child=solve(nextCounts,nextStock);
+        if(!child)continue;
+        const cuts=[];
+        pat.counts.forEach((n,i)=>{for(let k=0;k<n;k++)cuts.push(typeLengths[i]);});
+        const candidate={
+          pri:child.pri+(stock.first?stock.len:0),
+          total:child.total+stock.len,
+          waste:child.waste+pat.waste,
+          bins:[{len:stock.len,cuts,first:!!stock.first},...child.bins]
+        };
+        if(better(candidate,best))best=candidate;
+      }
     }
-
-    const cut=cuts[i];
-    // Prune if even the current number of used boards cannot beat the best.
-    const currentlyUsed=boards.reduce((n,b)=>n+(b.cuts.length?1:0),0);
-    if(best && currentlyUsed>best.used.length)return;
-
-    const tried=new Set();
-    // Best-fit first: place into the board leaving the least space.
-    const candidates=boards.map((b,index)=>({b,index,
-      rem:b.len-b.used-(b.cuts.length?kerf:0)-cut
-    })).filter(x=>x.rem>=-eps)
-      .sort((x,y)=>x.rem-y.rem);
-    for(const {b,index} of candidates){
-      const signature=[b.len,b.first?1:0,b.used,b.cuts.length].join(':');
-      if(tried.has(signature))continue;
-      tried.add(signature);
-      const oldUsed=b.used;
-      const add=cut+(b.cuts.length?kerf:0);
-      b.cuts.push(cut); b.used+=add;
-      search(i+1);
-      b.cuts.pop(); b.used=oldUsed;
-      if(nodes>maxNodes)break;
-    }
+    memo.set(key,best);
+    return best;
   }
-  search(0);
-  if(!best)return null;
-  const bins=best.used.map(b=>({
-    len:b.len,first:b.first,used:b.used,
-    cuts:b.cuts.slice().sort((a,b)=>b-a)
-  }));
-  const pri=bins.filter(b=>b.first).reduce((sum,b)=>sum+b.len,0);
-  return {pri,waste:best.waste,sc:best.leftoverPieces,bins};
+
+  const initialStock=stockList.map(s=>s.qty);
+  const result=solve(initial,initialStock);
+  if(tooComplex)return {tooComplex:true};
+  if(!result)return null;
+  return {...result,sc:result.bins.filter(b=>b.waste>EPS).length};
 }
 
 function run(){
@@ -205,6 +201,7 @@ function run(){
   if(tooLong.length){out.innerHTML=`<p class="err">${r2(Math.max(...tooLong))}" is longer than your longest stock (${ft(maxL/12)}). Add a longer size.</p>`;return}
   const res=plan(pieces,sizes,kerf);
   const need=r2(pieces.reduce((a,b)=>a+b,0));
+  if(res&&res.tooComplex){out.innerHTML='<p class="err">This order is too complex for the exact optimizer to finish in one run. Try splitting the order into smaller batches.</p>';return}
   if(!res){
     const avail=sizes.reduce((a,s)=>a+s.len*s.qty,0);
     out.innerHTML=`<p class="err">Your stock on hand can’t cover this order.</p><p>The cuts add up to ${need}". Stock on hand: ${isFinite(avail)?r2(avail)+'"':'unlimited'}. Add more stock or another size and try again.</p>`;return}
@@ -230,15 +227,5 @@ function run(){
 $('go').addEventListener('click',run);
 renderStock();
 </script>
-
-<script>
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./service-worker.js')
-      .catch(error => console.error('SW registration failed:', error));
-  });
-}
-</script>
-  
 </body>
 </html>
