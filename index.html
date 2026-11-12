@@ -132,9 +132,11 @@ function plan(pieces,sizes,kerf){
 
   function solve(counts,stockRemaining){
     if(counts.every(n=>n===0))return {pri:0,total:0,waste:0,bins:[]};
-    if(++visited>250000){tooComplex=true;return null;}
     const key=counts.join(',')+'|'+stockRemaining.map((q,i)=>Number.isFinite(q)?q:'*').join(',');
+    // Check previously calculated states BEFORE counting new states.
     if(memo.has(key))return memo.get(key);
+    if(++visited>250000){tooComplex=true;return null;}
+
     const anchor=counts.findIndex(n=>n>0); // longest remaining cut
     let best=null;
 
