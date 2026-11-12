@@ -68,7 +68,7 @@ textarea{width:100%;min-height:110px;resize:vertical}
 <textarea id="cuts" aria-label="Cut list" placeholder="32 = 2&#10;72 = 2&#10;16 = 2">32 = 2
 72 = 2
 16 = 2</textarea>
-<p class="hint">Enter lengths in inches without symbols: 32 = 2. One per line or all in a row. Use 5&#39; only when entering feet. The planner searches all selected stock lengths for the lowest-waste overall combination.</p>
+<p class="hint">Enter lengths in inches without symbols: 32 = 2. One per line or all in a row. Use 5&#39; only when entering feet. The planner searches selected stock lengths for the best overall combination: fewer stock pieces, less total stock length, then less leftover.</p>
 <div class="opts"><label>Saw blade width (in) <input type="number" id="kerf" min="0" step="0.0625" value="0" inputmode="decimal"></label></div>
 <button class="btn" id="go" type="button">Make cut plan</button>
 </section>
@@ -111,7 +111,11 @@ function plan(pieces,sizes,kerf){
   // every stock length instead of greedily filling one length at a time.
   const typeLengths=[...new Set(pieces)].sort((a,b)=>b-a);
   const initial=typeLengths.map(L=>pieces.filter(p=>p===L).length);
-  const stockList=sizes.filter(s=>s.qty>0).map(s=>({...s,remaining:s.qty}));
+  // If a stock size has at least as many pieces as the entire order has cuts,
+  // its quantity can never run out. Treat it as unlimited in the search state.
+  // This removes irrelevant quantity permutations and keeps exact optimization
+  // fast when (for example) 20 pieces of every stock size are available.
+  const stockList=sizes.filter(s=>s.qty>0).map(s=>({...s,qty:s.qty>=pieces.length?Infinity:s.qty}));
   const EPS=1e-9;
   let visited=0,tooComplex=false;
   const memo=new Map();
